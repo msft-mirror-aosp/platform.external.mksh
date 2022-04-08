@@ -5,8 +5,7 @@
 
 /*-
  * Copyright (c) 2002, 2003, 2004, 2005, 2006, 2007, 2008, 2009,
- *		 2010, 2011, 2012, 2013, 2014, 2015, 2016, 2017,
- *		 2019, 2020
+ *		 2010, 2011, 2012, 2013, 2014, 2015, 2016, 2017
  *	mirabilos <m@mirbsd.org>
  *
  * Provided that these terms and disclaimer and all copyright notices
@@ -39,7 +38,7 @@
 #endif
 #endif
 
-__RCSID("$MirOS: src/bin/mksh/funcs.c,v 1.373 2020/05/16 22:38:21 tg Exp $");
+__RCSID("$MirOS: src/bin/mksh/funcs.c,v 1.355 2018/10/20 21:04:28 tg Exp $");
 
 #if HAVE_KILLPG
 /*
@@ -120,6 +119,8 @@ const struct builtin mkshbuiltins[] = {
 	{Tfalse, c_false},
 	{"fc", c_fc},
 	{Tgetopts, c_getopts},
+	/* deprecated, replaced by typeset -g */
+	{"^=global", c_typeset},
 	{Tjobs, c_jobs},
 	{"kill", c_kill},
 	{"let", c_let},
@@ -132,8 +133,8 @@ const struct builtin mkshbuiltins[] = {
 #endif
 	{"~rename", c_rename},
 	{"*=return", c_exitreturn},
-	{Tsghset, c_set},
-	{"*=#shift", c_shift},
+	{Tsgset, c_set},
+	{"*=shift", c_shift},
 	{Tgsource, c_dot},
 #if !defined(MKSH_UNEMPLOYED) && HAVE_GETSID
 	{Tsuspend, c_suspend},
@@ -182,8 +183,11 @@ struct kill_info {
 	int name_width;
 };
 
-const struct t_op u_ops[] = {
-/* 0*/	{"-a",	TO_FILAXST },
+static const struct t_op {
+	char op_text[4];
+	Test_op op_num;
+} u_ops[] = {
+	{"-a",	TO_FILAXST },
 	{"-b",	TO_FILBDEV },
 	{"-c",	TO_FILCDEV },
 	{"-d",	TO_FILID },
@@ -195,23 +199,22 @@ const struct t_op u_ops[] = {
 	{"-h",	TO_FILSYM },
 	{"-k",	TO_FILSTCK },
 	{"-L",	TO_FILSYM },
-/*12*/	{"-n",	TO_STNZE },
+	{"-n",	TO_STNZE },
 	{"-O",	TO_FILUID },
-/*14*/	{"-o",	TO_OPTION },
+	{"-o",	TO_OPTION },
 	{"-p",	TO_FILFIFO },
-/*16*/	{"-r",	TO_FILRD },
+	{"-r",	TO_FILRD },
 	{"-S",	TO_FILSOCK },
 	{"-s",	TO_FILGZ },
 	{"-t",	TO_FILTT },
-/*20*/	{"-u",	TO_FILSETU },
+	{"-u",	TO_FILSETU },
 	{"-v",	TO_ISSET },
 	{"-w",	TO_FILWR },
-/*23*/	{"-x",	TO_FILEX },
+	{"-x",	TO_FILEX },
 	{"-z",	TO_STZER },
 	{"",	TO_NONOP }
 };
-cta(u_ops_size, NELEM(u_ops) == 26);
-const struct t_op b_ops[] = {
+static const struct t_op b_ops[] = {
 	{"=",	TO_STEQL },
 	{"==",	TO_STEQL },
 	{"!=",	TO_STNEQ },
@@ -330,11 +333,11 @@ c_print(const char **wp)
 #ifndef MKSH_MIDNIGHTBSD01ASH_COMPAT
 		    Flag(FSH) ||
 #endif
-		    as_builtin) {
+		    Flag(FAS_BUILTIN)) {
 			/* BSD "echo" cmd, Debian Policy 10.4 compliant */
 			++wp;
  bsd_echo:
-			if (*wp && !strcmp(*wp, Tdn)) {
+			if (*wp && !strcmp(*wp, "-n")) {
 				po.nl = false;
 				++wp;
 			}
@@ -721,16 +724,12 @@ do_whence(const char **wp, int fcflags, bool vflag, bool iscommand)
 			}
 			break;
 		case CALIAS:
-			if (!vflag && iscommand)
-				shprintf(Tf_s_, Talias);
-			if (vflag || iscommand)
-				print_value_quoted(shl_stdout, id);
-			if (vflag)
-				shprintf(" is an %s%s for ",
+			if (vflag) {
+				shprintf("%s is an %s%s for ", id,
 				    (tp->flag & EXPORT) ? "exported " : "",
 				    Talias);
-			else if (iscommand)
-				shf_putc('=', shl_stdout);
+			} else if (iscommand)
+				shprintf("%s %s=", Talias, id);
 			print_value_quoted(shl_stdout, tp->val.s);
 			break;
 		case CKEYWD:
@@ -752,15 +751,10 @@ do_whence(const char **wp, int fcflags, bool vflag, bool iscommand)
 bool
 valid_alias_name(const char *cp)
 {
-	switch (ord(*cp)) {
-	case ORD('+'):
-	case ORD('-'):
+	if (ord(*cp) == ORD('-'))
 		return (false);
-	case ORD('['):
-		if (ord(cp[1]) == ORD('[') && !cp[2])
-			return (false);
-		break;
-	}
+	if (ord(cp[0]) == ORD('[') && ord(cp[1]) == ORD('[') && !cp[2])
+		return (false);
 	while (*cp)
 		if (ctype(*cp, C_ALIAS))
 			++cp;
@@ -849,7 +843,7 @@ c_alias(const char **wp)
 			if ((ap->flag & (ISSET|xflag)) == (ISSET|xflag)) {
 				if (pflag)
 					shprintf(Tf_s_, Talias);
-				print_value_quoted(shl_stdout, ap->name);
+				shf_puts(ap->name, shl_stdout);
 				if (prefix != '+') {
 					shf_putc('=', shl_stdout);
 					print_value_quoted(shl_stdout, ap->val.s);
@@ -879,7 +873,7 @@ c_alias(const char **wp)
 			if (ap != NULL && (ap->flag&ISSET)) {
 				if (pflag)
 					shprintf(Tf_s_, Talias);
-				print_value_quoted(shl_stdout, ap->name);
+				shf_puts(ap->name, shl_stdout);
 				if (prefix != '+') {
 					shf_putc('=', shl_stdout);
 					print_value_quoted(shl_stdout, ap->val.s);
@@ -1303,32 +1297,54 @@ c_bind(const char **wp)
 #ifndef MKSH_SMALL
 	bool macro = false;
 #endif
+	bool list = false;
+	const char *cp;
+	char *up;
 
-	if (x_bind_check()) {
-		bi_errorf("can't bind, not a tty");
-		return (1);
-	}
-
-	while ((optc = ksh_getopt(wp, &builtin_opt, "lm")) != -1)
+	while ((optc = ksh_getopt(wp, &builtin_opt,
+#ifndef MKSH_SMALL
+	    "lm"
+#else
+	    "l"
+#endif
+	    )) != -1)
 		switch (optc) {
 		case 'l':
-			return (x_bind_list());
+			list = true;
+			break;
 #ifndef MKSH_SMALL
 		case 'm':
 			macro = true;
 			break;
 #endif
-		default:
+		case '?':
 			return (1);
 		}
 	wp += builtin_opt.optind;
 
 	if (*wp == NULL)
-		return (x_bind_showall());
+		/* list all */
+		rv = x_bind(NULL, NULL,
+#ifndef MKSH_SMALL
+		    false,
+#endif
+		    list);
 
-	do {
-		rv |= x_bind(*wp SMALLP(macro));
-	} while (*++wp);
+	for (; *wp != NULL; wp++) {
+		if ((cp = cstrchr(*wp, '=')) == NULL)
+			up = NULL;
+		else {
+			strdupx(up, *wp, ATEMP);
+			up[cp++ - *wp] = '\0';
+		}
+		if (x_bind(up ? up : *wp, cp,
+#ifndef MKSH_SMALL
+		    macro,
+#endif
+		    false))
+			rv = 1;
+		afree(up, ATEMP);
+	}
 
 	return (rv);
 }
@@ -1337,17 +1353,10 @@ c_bind(const char **wp)
 int
 c_shift(const char **wp)
 {
+	struct block *l = e->loc;
 	int n;
 	mksh_ari_t val;
 	const char *arg;
-	struct block *l = e->loc;
-
-	if ((l->flags & BF_RESETSPEC)) {
-		/* prevent pollution */
-		l->flags &= ~BF_RESETSPEC;
-		/* operate on parent environment */
-		l = l->next;
-	}
 
 	if (ksh_getopt(wp, &builtin_opt, null) == '?')
 		return (1);
@@ -1366,7 +1375,6 @@ c_shift(const char **wp)
 		bi_errorf(Tf_sD_s, Tbadnum, arg);
 		return (1);
 	}
-
 	if (l->argc < n) {
 		bi_errorf("nothing to shift");
 		return (1);
@@ -1581,6 +1589,7 @@ c_wait(const char **wp)
 	return (rv);
 }
 
+static const char REPLY[] = "REPLY";
 int
 c_read(const char **wp)
 {
@@ -1661,7 +1670,7 @@ c_read(const char **wp)
 		if (!builtin_opt.optarg[0])
 			fd = 0;
 		else if ((fd = check_fd(builtin_opt.optarg, R_OK, &ccp)) < 0) {
-			bi_errorf(Tf_sD_sD_s, Tdu, builtin_opt.optarg, ccp);
+			bi_errorf(Tf_sD_sD_s, "-u", builtin_opt.optarg, ccp);
 			return (2);
 		}
 		break;
@@ -1670,7 +1679,7 @@ c_read(const char **wp)
 	}
 	wp += builtin_opt.optind;
 	if (*wp == NULL)
-		*--wp = TREPLY;
+		*--wp = REPLY;
 
 	if (intoarray && wp[1] != NULL) {
 		bi_errorf(Ttoo_many_args);
@@ -2020,6 +2029,7 @@ int
 c_eval(const char **wp)
 {
 	struct source *s, *saves = source;
+	unsigned char savef;
 	int rv;
 
 	if (ksh_getopt(wp, &builtin_opt, null) == '?')
@@ -2062,7 +2072,10 @@ c_eval(const char **wp)
 	/* SUSv4: OR with a high value never written otherwise */
 	exstat |= 0x4000;
 
+	savef = Flag(FERREXIT);
+	Flag(FERREXIT) |= 0x80;
 	rv = shell(s, 2);
+	Flag(FERREXIT) = savef;
 	source = saves;
 	afree(s, ATEMP);
 	if (exstat & 0x4000)
@@ -2224,13 +2237,7 @@ c_set(const char **wp)
 	int argi;
 	bool setargs;
 	struct block *l = e->loc;
-
-	if ((l->flags & BF_RESETSPEC)) {
-		/* prevent pollution */
-		l->flags &= ~BF_RESETSPEC;
-		/* operate on parent environment */
-		l = l->next;
-	}
+	const char **owp;
 
 	if (wp[1] == NULL) {
 		static const char *args[] = { Tset, "-", NULL };
@@ -2241,8 +2248,6 @@ c_set(const char **wp)
 		return (2);
 	/* set $# and $* */
 	if (setargs) {
-		const char **owp;
-
 		wp += argi - 1;
 		owp = wp;
 		/* save $0 */
@@ -2574,25 +2579,25 @@ c_mknod(const char **wp)
 #endif
 
 /*-
- * test(1) roughly accepts the following grammar:
- *	oexpr	::= aexpr | aexpr "-o" oexpr ;
- *	aexpr	::= nexpr | nexpr "-a" aexpr ;
- *	nexpr	::= primary | "!" nexpr ;
- *	primary	::= unary-operator operand
- *		| operand binary-operator operand
- *		| operand
- *		| "(" oexpr ")"
- *		;
- *
- *	unary-operator ::= "-a"|"-b"|"-c"|"-d"|"-e"|"-f"|"-G"|"-g"|"-H"|"-h"|
- *			   "-k"|"-L"|"-n"|"-O"|"-o"|"-p"|"-r"|"-S"|"-s"|"-t"|
- *			   "-u"|"-v"|"-w"|"-x"|"-z";
- *
- *	binary-operator ::= "="|"=="|"!="|"<"|">"|"-eq"|"-ne"|"-gt"|"-ge"|
- *			    "-lt"|"-le"|"-ef"|"-nt"|"-ot";
- *
- *	operand ::= <anything>
- */
+   test(1) roughly accepts the following grammar:
+	oexpr	::= aexpr | aexpr "-o" oexpr ;
+	aexpr	::= nexpr | nexpr "-a" aexpr ;
+	nexpr	::= primary | "!" nexpr ;
+	primary	::= unary-operator operand
+		| operand binary-operator operand
+		| operand
+		| "(" oexpr ")"
+		;
+
+	unary-operator ::= "-a"|"-b"|"-c"|"-d"|"-e"|"-f"|"-G"|"-g"|"-H"|"-h"|
+			   "-k"|"-L"|"-n"|"-O"|"-o"|"-p"|"-r"|"-S"|"-s"|"-t"|
+			   "-u"|"-v"|"-w"|"-x"|"-z";
+
+	binary-operator ::= "="|"=="|"!="|"<"|">"|"-eq"|"-ne"|"-gt"|"-ge"|
+			    "-lt"|"-le"|"-ef"|"-nt"|"-ot";
+
+	operand ::= <anything>
+*/
 
 /* POSIX says > 1 for errors */
 #define T_ERR_EXIT 2
@@ -2744,35 +2749,12 @@ test_isop(Test_meta meta, const char *s)
 }
 
 #ifdef __OS2__
-#define test_access(name,mode)	access_ex(access, (name), (mode))
-#define test_stat(name,buffer)	stat_ex(stat, (name), (buffer))
-#define test_lstat(name,buffer)	stat_ex(lstat, (name), (buffer))
+#define test_access(name, mode) access_ex(access, (name), (mode))
+#define test_stat(name, buffer) stat_ex((name), (buffer))
 #else
-#define test_access(name,mode)	access((name), (mode))
-#define test_stat(name,buffer)	stat((name), (buffer))
-#define test_lstat(name,buffer)	lstat((name), (buffer))
+#define test_access(name, mode) access((name), (mode))
+#define test_stat(name, buffer) stat((name), (buffer))
 #endif
-
-#if HAVE_ST_MTIM
-#undef st_mtimensec
-#define st_mtimensec st_mtim.tv_nsec
-#endif
-
-static int
-mtimecmp(const struct stat *sb1, const struct stat *sb2)
-{
-	if (sb1->st_mtime < sb2->st_mtime)
-		return (-1);
-	if (sb1->st_mtime > sb2->st_mtime)
-		return (1);
-#if (HAVE_ST_MTIMENSEC || HAVE_ST_MTIM)
-	if (sb1->st_mtimensec < sb2->st_mtimensec)
-		return (-1);
-	if (sb1->st_mtimensec > sb2->st_mtimensec)
-		return (1);
-#endif
-	return (0);
-}
 
 int
 test_eval(Test_env *te, Test_op op, const char *opnd1, const char *opnd2,
@@ -2867,31 +2849,31 @@ test_eval(Test_env *te, Test_op op, const char *opnd1, const char *opnd2,
 
 	/* -d */
 	case TO_FILID:
-		return (test_stat(opnd1, &b1) == 0 && S_ISDIR(b1.st_mode));
+		return (stat(opnd1, &b1) == 0 && S_ISDIR(b1.st_mode));
 
 	/* -c */
 	case TO_FILCDEV:
-		return (test_stat(opnd1, &b1) == 0 && S_ISCHR(b1.st_mode));
+		return (stat(opnd1, &b1) == 0 && S_ISCHR(b1.st_mode));
 
 	/* -b */
 	case TO_FILBDEV:
-		return (test_stat(opnd1, &b1) == 0 && S_ISBLK(b1.st_mode));
+		return (stat(opnd1, &b1) == 0 && S_ISBLK(b1.st_mode));
 
 	/* -p */
 	case TO_FILFIFO:
-		return (test_stat(opnd1, &b1) == 0 && S_ISFIFO(b1.st_mode));
+		return (stat(opnd1, &b1) == 0 && S_ISFIFO(b1.st_mode));
 
 	/* -h or -L */
 	case TO_FILSYM:
 #ifdef MKSH__NO_SYMLINK
 		return (0);
 #else
-		return (test_lstat(opnd1, &b1) == 0 && S_ISLNK(b1.st_mode));
+		return (lstat(opnd1, &b1) == 0 && S_ISLNK(b1.st_mode));
 #endif
 
 	/* -S */
 	case TO_FILSOCK:
-		return (test_stat(opnd1, &b1) == 0 && S_ISSOCK(b1.st_mode));
+		return (stat(opnd1, &b1) == 0 && S_ISSOCK(b1.st_mode));
 
 	/* -H => HP context dependent files (directories) */
 	case TO_FILCDF:
@@ -2910,7 +2892,7 @@ test_eval(Test_env *te, Test_op op, const char *opnd1, const char *opnd2,
 		 */
 
 		nv = shf_smprintf("%s+", opnd1);
-		i = (test_stat(nv, &b1) == 0 && S_ISCDF(b1.st_mode));
+		i = (stat(nv, &b1) == 0 && S_ISCDF(b1.st_mode));
 		afree(nv, ATEMP);
 		return (i);
 	}
@@ -2920,18 +2902,18 @@ test_eval(Test_env *te, Test_op op, const char *opnd1, const char *opnd2,
 
 	/* -u */
 	case TO_FILSETU:
-		return (test_stat(opnd1, &b1) == 0 &&
+		return (stat(opnd1, &b1) == 0 &&
 		    (b1.st_mode & S_ISUID) == S_ISUID);
 
 	/* -g */
 	case TO_FILSETG:
-		return (test_stat(opnd1, &b1) == 0 &&
+		return (stat(opnd1, &b1) == 0 &&
 		    (b1.st_mode & S_ISGID) == S_ISGID);
 
 	/* -k */
 	case TO_FILSTCK:
 #ifdef S_ISVTX
-		return (test_stat(opnd1, &b1) == 0 &&
+		return (stat(opnd1, &b1) == 0 &&
 		    (b1.st_mode & S_ISVTX) == S_ISVTX);
 #else
 		return (0);
@@ -2939,8 +2921,7 @@ test_eval(Test_env *te, Test_op op, const char *opnd1, const char *opnd2,
 
 	/* -s */
 	case TO_FILGZ:
-		return (test_stat(opnd1, &b1) == 0 &&
-		    (off_t)b1.st_size > (off_t)0);
+		return (stat(opnd1, &b1) == 0 && (off_t)b1.st_size > (off_t)0);
 
 	/* -t */
 	case TO_FILTT:
@@ -2953,13 +2934,11 @@ test_eval(Test_env *te, Test_op op, const char *opnd1, const char *opnd2,
 
 	/* -O */
 	case TO_FILUID:
-		return (test_stat(opnd1, &b1) == 0 &&
-		    (uid_t)b1.st_uid == ksheuid);
+		return (stat(opnd1, &b1) == 0 && (uid_t)b1.st_uid == ksheuid);
 
 	/* -G */
 	case TO_FILGID:
-		return (test_stat(opnd1, &b1) == 0 &&
-		    (gid_t)b1.st_gid == kshegid);
+		return (stat(opnd1, &b1) == 0 && (gid_t)b1.st_gid == getegid());
 
 	/*
 	 * Binary Operators
@@ -2997,9 +2976,9 @@ test_eval(Test_env *te, Test_op op, const char *opnd1, const char *opnd2,
 		 * ksh88/ksh93 succeed if file2 can't be stated
 		 * (subtly different from 'does not exist').
 		 */
-		return (test_stat(opnd1, &b1) == 0 &&
-		    (((s = test_stat(opnd2, &b2)) == 0 &&
-		    mtimecmp(&b1, &b2) > 0) || s < 0));
+		return (stat(opnd1, &b1) == 0 &&
+		    (((s = stat(opnd2, &b2)) == 0 &&
+		    b1.st_mtime > b2.st_mtime) || s < 0));
 
 	/* -ot */
 	case TO_FILOT:
@@ -3007,14 +2986,13 @@ test_eval(Test_env *te, Test_op op, const char *opnd1, const char *opnd2,
 		 * ksh88/ksh93 succeed if file1 can't be stated
 		 * (subtly different from 'does not exist').
 		 */
-		return (test_stat(opnd2, &b2) == 0 &&
-		    (((s = test_stat(opnd1, &b1)) == 0 &&
-		    mtimecmp(&b1, &b2) < 0) || s < 0));
+		return (stat(opnd2, &b2) == 0 &&
+		    (((s = stat(opnd1, &b1)) == 0 &&
+		    b1.st_mtime < b2.st_mtime) || s < 0));
 
 	/* -ef */
 	case TO_FILEQ:
-		return (test_stat(opnd1, &b1) == 0 &&
-		    test_stat(opnd2, &b2) == 0 &&
+		return (stat (opnd1, &b1) == 0 && stat (opnd2, &b2) == 0 &&
 		    b1.st_dev == b2.st_dev && b1.st_ino == b2.st_ino);
 
 	/* all other cases */
@@ -3177,7 +3155,7 @@ ptest_isa(Test_env *te, Test_meta meta)
 {
 	/* Order important - indexed by Test_meta values */
 	static const char * const tokens[] = {
-		Tdo, Tda, "!", "(", ")"
+		"-o", "-a", "!", "(", ")"
 	};
 	Test_op rv;
 
@@ -3491,7 +3469,7 @@ c_cat(const char **wp)
 #define MKSH_CAT_BUFSIZ 4096
 
 	/* parse options: POSIX demands we support "-u" as no-op */
-	while ((rv = ksh_getopt(wp, &builtin_opt, Tu)) != -1) {
+	while ((rv = ksh_getopt(wp, &builtin_opt, "u")) != -1) {
 		switch (rv) {
 		case 'u':
 			/* we already operate unbuffered */

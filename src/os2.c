@@ -1,5 +1,5 @@
 /*-
- * Copyright (c) 2015, 2017, 2020
+ * Copyright (c) 2015, 2017
  *	KO Myung-Hun <komh@chollian.net>
  * Copyright (c) 2017
  *	mirabilos <m@mirbsd.org>
@@ -20,7 +20,6 @@
  * of said person's immediate fault when using the work as intended.
  */
 
-#define INCL_KBD
 #define INCL_DOS
 #include <os2.h>
 
@@ -32,7 +31,7 @@
 #include <unistd.h>
 #include <process.h>
 
-__RCSID("$MirOS: src/bin/mksh/os2.c,v 1.10 2020/04/07 11:13:45 tg Exp $");
+__RCSID("$MirOS: src/bin/mksh/os2.c,v 1.8 2017/12/22 16:41:42 tg Exp $");
 
 static char *remove_trailing_dots(char *);
 static int access_stat_ex(int (*)(), const char *, void *);
@@ -173,8 +172,6 @@ init_extlibpath(void)
 void
 os2_init(int *argcp, const char ***argvp)
 {
-	KBDINFO ki;
-
 	response(argcp, argvp);
 
 	init_extlibpath();
@@ -185,12 +182,6 @@ os2_init(int *argcp, const char ***argvp)
 		setmode(STDOUT_FILENO, O_BINARY);
 	if (!isatty(STDERR_FILENO))
 		setmode(STDERR_FILENO, O_BINARY);
-
-	/* ensure ECHO mode is ON so that read command echoes. */
-	memset(&ki, 0, sizeof(ki));
-	ki.cb = sizeof(ki);
-	ki.fsMask |= KEYBOARD_ECHO_ON;
-	KbdSetStatus(&ki, 0);
 
 	atexit(cleanup);
 }
@@ -304,12 +295,11 @@ access_ex(int (*fn)(const char *, int), const char *name, int mode)
 	return (access_stat_ex(fn, name, (void *)mode));
 }
 
-/* stat()/lstat() version */
+/* stat() version */
 int
-stat_ex(int (*fn)(const char *, struct stat *),
-    const char *name, struct stat *buffer)
+stat_ex(const char *name, struct stat *buffer)
 {
-	return (access_stat_ex(fn, name, buffer));
+	return (access_stat_ex(stat, name, buffer));
 }
 
 static int
